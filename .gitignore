@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Dataset (large, downloaded separately)
+data/realwaste.zip
+data/realwaste-main/
+data/realwaste_64.npz
+
+# Model checkpoints / outputs
+*.pt
+*.pth
+
+# OS / editor
+.DS_Store
+.vscode/
