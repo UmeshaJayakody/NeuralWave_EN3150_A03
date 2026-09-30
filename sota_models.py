@@ -1,3 +1,11 @@
+"""
+Transfer-learning wrappers around two lightweight, edge-friendly SOTA backbones:
+MobileNetV2 and SqueezeNet1_1. Base (feature-extraction) weights are frozen;
+only a new Dense/Conv classification head for the 9 RealWaste classes is trained.
+
+Pretrained backbones expect ImageNet-normalized input, so `imagenet_normalize`
+is applied on top of the [0, 1] images the shared data pipeline produces.
+"""
 
 import torch
 import torch.nn as nn
