@@ -10,7 +10,10 @@ import time
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score, classification_report, confusion_matrix, precision_score, recall_score,
+)
+from torchinfo import summary
 
 
 def train_model(model, train_loader, val_loader, optimizer, epochs=20, device="cpu"):
@@ -78,14 +81,16 @@ def predict(model, loader, device="cpu"):
     return np.array(y_true), np.array(y_pred)
 
 
-def evaluate_classification(model, loader, device="cpu"):
-    """Runs `model` over `loader` and returns a dict of test-set metrics."""
+def evaluate_classification(model, loader, device="cpu", class_names=None):
+    """Runs `model` over `loader` and returns a dict of test-set metrics.
+    `report` is sklearn's per-class precision/recall/F1 table (as text)."""
     y_true, y_pred = predict(model, loader, device)
     return {
         "accuracy": accuracy_score(y_true, y_pred),
         "precision": precision_score(y_true, y_pred, average="weighted", zero_division=0),
         "recall": recall_score(y_true, y_pred, average="weighted", zero_division=0),
         "confusion_matrix": confusion_matrix(y_true, y_pred),
+        "report": classification_report(y_true, y_pred, target_names=class_names, digits=3, zero_division=0),
     }
 
 
@@ -98,6 +103,26 @@ def model_size_kb(model):
     buffer = io.BytesIO()
     torch.save(model.state_dict(), buffer)
     return buffer.getbuffer().nbytes / 1024
+
+
+def count_macs(model, img_size=64):
+    """Multiply-accumulate operations for one forward pass of a single RGB image (torchinfo).
+    Hardware-independent compute cost -- frozen layers count too, they still run at inference."""
+    stats = summary(model, input_size=(1, 3, img_size, img_size), device="cpu", verbose=0)
+    return stats.total_mult_adds
+
+
+def inference_latency_ms(model, batch_size=1, img_size=64, warmup=20, runs=200):
+    """Mean CPU wall-clock time (ms) of one forward pass over a batch, measured after warm-up."""
+    model.to("cpu").eval()
+    images = torch.rand(batch_size, 3, img_size, img_size)
+    with torch.no_grad():
+        for _ in range(warmup):
+            model(images)
+        start = time.perf_counter()
+        for _ in range(runs):
+            model(images)
+    return (time.perf_counter() - start) / runs * 1000
 
 
 if __name__ == "__main__":
@@ -113,6 +138,8 @@ if __name__ == "__main__":
     assert 0.0 <= history["train_acc"][0] <= 1.0
     assert avg_epoch_time > 0
     assert model_size_kb(model) > 0
+    assert count_macs(model) > 0
+    assert inference_latency_ms(model, runs=5) > 0
 
     metrics = evaluate_classification(model, val_loader)
     assert 0.0 <= metrics["accuracy"] <= 1.0

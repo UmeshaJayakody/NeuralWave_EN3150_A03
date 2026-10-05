@@ -1,7 +1,12 @@
 """
 Transfer-learning wrappers around two lightweight, edge-friendly SOTA backbones:
-MobileNetV2 and SqueezeNet1_1. Base (feature-extraction) weights are frozen;
-only a new Dense/Conv classification head for the 9 RealWaste classes is trained.
+MobileNetV2 and SqueezeNet1_1, trained in two stages:
+
+1. Transfer learning: the ImageNet backbone is frozen and only a new Dense/Conv
+   classification head for the 9 RealWaste classes is trained.
+2. Fine-tuning: `unfreeze_last_blocks` makes the last few backbone blocks
+   trainable again, and they are trained together with the head at a lower
+   learning rate so the pretrained features adapt without being destroyed.
 
 Pretrained backbones expect ImageNet-normalized input, so `imagenet_normalize`
 is applied on top of the [0, 1] images the shared data pipeline produces.
@@ -22,7 +27,19 @@ def imagenet_normalize(images):
     return (images - IMAGENET_MEAN.to(images.device)) / IMAGENET_STD.to(images.device)
 
 
+def unfreeze_last_blocks(model, n_blocks=None):
+    """Stage 2 (fine-tuning): make the last `n_blocks` children of `model.features` trainable.
+    Defaults to the per-architecture choice in `model.FINE_TUNE_BLOCKS`."""
+    n_blocks = n_blocks or model.FINE_TUNE_BLOCKS
+    for block in list(model.features.children())[-n_blocks:]:
+        for p in block.parameters():
+            p.requires_grad = True
+
+
 class MobileNetV2Classifier(nn.Module):
+    # features[16..18]: the last two inverted-residual blocks + the final 1x1 conv (320 -> 1280)
+    FINE_TUNE_BLOCKS = 3
+
     def __init__(self, num_classes=NUM_CLASSES):
         super().__init__()
         base = tvm.mobilenet_v2(weights=tvm.MobileNet_V2_Weights.DEFAULT)
@@ -42,6 +59,9 @@ class MobileNetV2Classifier(nn.Module):
 
 
 class SqueezeNetClassifier(nn.Module):
+    # features[11..12]: the last two Fire modules (512 output channels each)
+    FINE_TUNE_BLOCKS = 2
+
     def __init__(self, num_classes=NUM_CLASSES):
         super().__init__()
         base = tvm.squeezenet1_1(weights=tvm.SqueezeNet1_1_Weights.DEFAULT)
@@ -80,7 +100,15 @@ if __name__ == "__main__":
     out = sqz(dummy)
     assert out.shape == (2, NUM_CLASSES)
     assert torch.allclose(out.sum(dim=1), torch.ones(2), atol=1e-4)
+    trainable_sqz = count_params(sqz)
 
     print(f"MobileNetV2 trainable (head only): {trainable_mnet:,}")
-    print(f"SqueezeNet trainable (head only): {count_params(sqz):,}")
+    print(f"SqueezeNet trainable (head only): {trainable_sqz:,}")
+
+    unfreeze_last_blocks(mnet)
+    unfreeze_last_blocks(sqz)
+    assert count_params(mnet) > trainable_mnet and count_params(sqz) > trainable_sqz
+    assert count_params(mnet) < sum(p.numel() for p in mnet.parameters()), "early blocks stay frozen"
+    print(f"MobileNetV2 trainable (fine-tuning): {count_params(mnet):,}")
+    print(f"SqueezeNet trainable (fine-tuning): {count_params(sqz):,}")
     print("OK")
